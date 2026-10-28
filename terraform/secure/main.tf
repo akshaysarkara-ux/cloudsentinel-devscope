@@ -62,3 +62,20 @@ resource "aws_s3_bucket_logging" "example" {
   target_bucket = aws_s3_bucket.logs.id
   target_prefix = "s3-access-logs/"
 }
+# Enable versioning for the main S3 bucket
+resource "aws_s3_bucket_versioning" "example" {
+  bucket = aws_s3_bucket.example.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Enable versioning for the access-logs bucket
+resource "aws_s3_bucket_versioning" "logs" {
+  bucket = aws_s3_bucket.logs.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
