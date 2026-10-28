@@ -43,3 +43,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "example" {
     }
   }
 }
+# Separate bucket to receive S3 access logs
+resource "aws_s3_bucket" "logs" {
+  bucket = "cloudsentinel-example-access-logs"
+}
+
+resource "aws_s3_bucket_public_access_block" "logs" {
+  bucket = aws_s3_bucket.logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_logging" "example" {
+  bucket        = aws_s3_bucket.example.id
+  target_bucket = aws_s3_bucket.logs.id
+  target_prefix = "s3-access-logs/"
+}
