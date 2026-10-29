@@ -36,11 +36,26 @@ class TestSecurityWorkflow(unittest.TestCase):
 
         ranked = result["prioritised_findings"]
         remediation = result["remediation_result"]
+        report = result["report"]
 
+        # Check risk prioritisation.
         self.assertEqual(ranked[0]["id"], "HIGH-001")
         self.assertEqual(ranked[1]["id"], "LOW-001")
+
+        # Check simulated remediation.
         self.assertEqual(remediation["public_access"], False)
         self.assertEqual(remediation["status"], "REMEDIATED")
+
+        # Check report generation and integration.
+        self.assertEqual(report["project"], "CloudSentinel")
+        self.assertEqual(report["total_findings"], 2)
+        self.assertEqual(
+            report["findings"][0]["id"], "HIGH-001"
+        )
+        self.assertEqual(
+            report["remediation"]["status"], "REMEDIATED"
+        )
+        self.assertIn("simulated", report["safety_note"].lower())
 
         # The original configuration must remain unchanged.
         self.assertTrue(storage_config["public_access"])
