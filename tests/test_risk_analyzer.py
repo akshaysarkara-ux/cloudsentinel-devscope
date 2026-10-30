@@ -87,7 +87,41 @@ class TestRiskAnalyzer(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             analyse_finding(finding)
+    def test_check_id_is_preserved(self):
+        finding = make_finding(
+            "F-008",
+            check_id="BLOCK_PUBLIC_ACLS",
+        )
 
+        result = analyse_finding(finding)
 
+        self.assertEqual(
+            result["check_id"],
+            "BLOCK_PUBLIC_ACLS",
+        )
+
+    def test_same_rule_and_resource_are_recognised(self):
+        findings = [
+            make_finding(
+                "TF-001",
+                check_id="BLOCK_PUBLIC_ACLS",
+                rule_id="PUBLIC_ACCESS",
+                resource="storage.tf",
+            ),
+            make_finding(
+                "TF-002",
+                check_id="BLOCK_PUBLIC_POLICY",
+                rule_id="PUBLIC_ACCESS",
+                resource="storage.tf",
+            ),
+        ]
+
+        results = prioritise_findings(findings)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            {item["check_id"] for item in results},
+            {"BLOCK_PUBLIC_ACLS", "BLOCK_PUBLIC_POLICY"},
+        )
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,3 @@
-"""CloudSentinel: Local cloud security intelligence dashboard."""
-
 import json
 import tempfile
 from pathlib import Path
@@ -12,9 +10,9 @@ from src.terraform_scanner import scan_terraform_file
 from src.risk_analyzer import prioritise_findings
 
 
-# ==================================================
-# Page configuration
-# ==================================================
+# --------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------
 
 st.set_page_config(
     page_title="CloudSentinel",
@@ -22,622 +20,622 @@ st.set_page_config(
     layout="wide",
 )
 
+st.title("🛡️ CloudSentinel")
+st.subheader("Explainable Cloud Security Risk Analysis")
+st.write(
+    "A local DevSecOps security tool that analyses Terraform "
+    "configurations, prioritises risks, and simulates remediation."
+)
 
-# ==================================================
-# Demonstration data
-# ==================================================
+st.info(
+    "CloudSentinel runs locally. It does not connect to AWS "
+    "or modify real cloud resources."
+)
 
-SAMPLE_FINDINGS = [
+
+# --------------------------------------------------
+# SAMPLE SECURITY FINDINGS
+# --------------------------------------------------
+
+sample_findings = [
     {
         "id": "DEMO-001",
-        "check_id": "PUBLIC_STORAGE_EXPOSURE",
+        "finding_id": "DEMO-001",
+        "check_id": "CKV_AWS_20",
         "rule_id": "PUBLIC_ACCESS",
         "resource": "demo-storage",
         "severity": "critical",
         "exposure": "public",
         "data_sensitivity": "sensitive",
         "exploitability": "high",
-        "message": "Storage may expose sensitive information.",
+        "recommendation": "Disable public access to the storage resource.",
     },
     {
         "id": "DEMO-002",
-        "check_id": "ENCRYPTION_REVIEW",
+        "finding_id": "DEMO-002",
+        "check_id": "CKV_AWS_19",
         "rule_id": "ENCRYPTION_DISABLED",
         "resource": "demo-database",
         "severity": "medium",
         "exposure": "internal",
         "data_sensitivity": "sensitive",
         "exploitability": "medium",
-        "message": "Review encryption settings.",
+        "recommendation": "Enable encryption for stored data.",
     },
     {
         "id": "DEMO-003",
-        "check_id": "LOGGING_REVIEW",
+        "finding_id": "DEMO-003",
+        "check_id": "CKV_AWS_21",
         "rule_id": "LOGGING_DISABLED",
-        "resource": "demo-application",
+        "resource": "demo-storage",
         "severity": "low",
         "exposure": "internal",
         "data_sensitivity": "normal",
         "exploitability": "low",
-        "message": "Review access logging configuration.",
+        "recommendation": "Enable logging to improve monitoring.",
     },
 ]
 
-SAMPLE_STORAGE_CONFIG = {
+sample_storage_config = {
+    "resource": "demo-storage",
     "public_access": True,
 }
+# --------------------------------------------------
+# HELPER: DISPLAY FINDINGS TABLE
+# --------------------------------------------------
 
+def display_findings_table(findings, key_prefix="findings"):
 
-# ==================================================
-# Helper functions
-# ==================================================
+    if not findings:
+        st.info("No findings to display.")
+        return
 
-def safe_value(value):
-    """Convert values into display-friendly text."""
-    if value is None:
-        return "Not available"
-    return str(value)
+    df = pd.DataFrame(findings)
 
+    preferred_columns = [
+        "priority",
+        "priority_decision",
+        "finding_id",
+        "check_id",
+        "rule_id",
+        "resource",
+        "severity",
+        "risk_level",
+        "risk_score",
+        "priority_reason",
+        "recommendation",
+    ]
 
-def related_findings_section(
-    findings,
-    title="Related Security Findings",
-):
-    """Group findings sharing the same resource and rule."""
+    columns = [
+        column for column in preferred_columns
+        if column in df.columns
+    ]
 
-    st.subheader(f"🔗 {title}")
-    st.caption(
-        "Checks are grouped when they share a resource and security "
-        "rule. Grouping helps investigation but does not prove that "
-        "the findings are duplicate vulnerabilities."
+    st.dataframe(
+        df[columns],
+        use_container_width=True,
+        hide_index=True,
     )
+
+
+# --------------------------------------------------
+# HELPER: GROUP RELATED FINDINGS
+# --------------------------------------------------
+
+def related_findings_section(findings, title="Related Findings"):
+
+    st.subheader(title)
+
+    if not findings:
+        st.info("No related findings available.")
+        return
 
     groups = {}
 
-    for item in findings:
-        resource = str(
-            item.get("resource", "unknown")
-        ).strip().lower()
-
-        rule_id = str(
-            item.get("rule_id", "unknown")
-        ).strip().upper()
+    for finding in findings:
+        resource = finding.get("resource", "Unknown")
+        rule_id = finding.get("rule_id", "Unknown")
 
         group_key = (resource, rule_id)
-        groups.setdefault(group_key, []).append(item)
 
-    related_groups = [
-        (key, items)
-        for key, items in groups.items()
-        if len(items) > 1
-    ]
+        if group_key not in groups:
+            groups[group_key] = []
+
+        groups[group_key].append(finding)
+
+    related_groups = {
+        key: value
+        for key, value in groups.items()
+        if len(value) > 1
+    }
 
     if not related_groups:
-        st.info(
-            "No findings sharing both a resource and a security rule "
-            "were identified."
+        st.caption(
+            "No multiple findings were detected for the same "
+            "resource and security rule."
         )
         return
 
-    for (resource, rule_id), items in related_groups:
+    for (resource, rule_id), items in related_groups.items():
+
         with st.expander(
-            f"{resource} — {rule_id} "
-            f"({len(items)} related checks)"
+            f"{resource} — {rule_id} ({len(items)} findings)"
         ):
             for item in items:
-                check_id = item.get(
-                    "check_id",
-                    item.get("id", "Unknown"),
+                st.write(
+                    f"- {item.get('finding_id', 'Unknown')} "
+                    f"— {item.get('severity', 'Unknown')} severity"
                 )
 
-                message = item.get(
-                    "message",
-                    "No description available.",
-                )
 
-                st.write(f"**{check_id}** — {message}")
-
-
-def display_findings_table(findings, key_prefix="findings"):
-    """Display ranked findings in a table."""
-
-    if not findings:
-        st.info("No security findings were detected.")
-        return
-
-    table_data = []
-
-    for index, item in enumerate(findings, start=1):
-        table_data.append({
-            "Priority": item.get("priority_rank", index),
-            "Priority Decision": item.get("priority", "REVIEW"),
-            "Finding ID": item.get("id", "Unknown"),
-            "Check ID": item.get("check_id", "Not provided"),
-            "Rule ID": item.get("rule_id", "Unknown"),
-            "Resource": item.get("resource", "Unknown"),
-            "Severity": safe_value(
-                item.get("severity")
-            ).upper(),
-            "Risk Level": item.get("risk_level", "Unknown"),
-            "Risk Score": item.get("risk_score", 0),
-            "Why This Priority": item.get(
-                "priority_reason",
-                "Review the risk factors.",
-            ),
-            "Recommendation": item.get(
-                "recommendation",
-                "Review the security configuration.",
-            ),
-        })
-
-    st.dataframe(
-        pd.DataFrame(table_data),
-        use_container_width=True,
-        hide_index=True,
-        key=f"{key_prefix}_table",
-    )
-
+# --------------------------------------------------
+# HELPER: EXPLAIN SECURITY DECISIONS
+# --------------------------------------------------
 
 def display_finding_explanations(
     findings,
-    title="Sample Security Decisions",
-    key_prefix="sample",
+    title="Security Decision Explanation",
+    key_prefix="explanation",
 ):
-    """Explain a selected finding using a uniquely keyed selector."""
 
-    st.subheader(f"🔍 {title}")
+    st.subheader(title)
 
     if not findings:
-        st.info("There are no findings to explain.")
+        st.info("No findings available for explanation.")
         return
 
-    labels = []
+    finding_labels = {}
 
-    for index, item in enumerate(findings):
-        identifier = item.get(
-            "check_id",
-            item.get("id", "Unknown"),
+    for index, finding in enumerate(findings):
+        finding_id = finding.get(
+            "finding_id",
+            f"Finding {index + 1}",
         )
 
-        score = item.get("risk_score", 0)
-        level = item.get("risk_level", "Unknown")
+        finding_labels[f"{finding_id} — {finding.get('rule_id', 'Unknown')}"] = index
 
-        labels.append(
-            f"{identifier} — {level} ({score}/100)"
-        )
-
-    selected_index = st.selectbox(
-        "Select a finding to investigate",
-        options=list(range(len(findings))),
-        format_func=lambda index: labels[index],
-        key=f"finding_explanation_selection_{key_prefix}",
+    selected_label = st.selectbox(
+        "Select a finding to understand its priority",
+        list(finding_labels.keys()),
+        key=f"{key_prefix}_select",
     )
 
-    item = findings[selected_index]
+    selected = findings[finding_labels[selected_label]]
 
-    st.write(f"**Finding:** {item.get('id', 'Unknown')}")
+    st.write("**Finding:**", selected.get("finding_id", "Unknown"))
+    st.write("**Resource:**", selected.get("resource", "Unknown"))
+    st.write("**Severity:**", selected.get("severity", "Unknown"))
+    st.write("**Risk level:**", selected.get("risk_level", "Not available"))
+    st.write("**Risk score:**", selected.get("risk_score", "Not available"))
+
     st.write(
-        f"**Check ID:** {item.get('check_id', 'Not provided')}"
+        "**Why this priority?**",
+        selected.get(
+            "priority_reason",
+            "Priority is based on the risk analysis.",
+        ),
     )
+
     st.write(
-        f"**Rule ID:** {item.get('rule_id', 'Unknown')}"
-    )
-    st.write(
-        f"**Resource:** {item.get('resource', 'Unknown')}"
-    )
-    st.write(
-        f"**Severity:** {safe_value(item.get('severity')).upper()}"
-    )
-    st.write(
-        f"**Risk level:** {item.get('risk_level', 'Unknown')}"
-    )
-    st.write(
-        f"**Risk score:** {item.get('risk_score', 0)}/100"
-    )
-    st.write(
-        f"**Priority decision:** {item.get('priority', 'REVIEW')}"
-    )
-    st.write(
-        f"**Why this priority:** "
-        f"{item.get('priority_reason', 'Not available')}"
-    )
-    st.write(
-        f"**Recommendation:** "
-        f"{item.get('recommendation', 'Review the configuration.')}"
+        "**Recommended action:**",
+        selected.get("recommendation", "Review this finding."),
     )
 
-    related_count = item.get("related_finding_count")
+    st.write("**Risk factors:**")
 
-    if related_count is not None:
-        st.write(f"**Related findings:** {related_count}")
-
-    related_ids = item.get("related_findings", [])
-
-    if related_ids:
-        st.write(
-            "**Related check IDs:** " + ", ".join(related_ids)
-        )
-
-    breakdown = item.get("score_breakdown")
-
-    if isinstance(breakdown, dict):
-        st.write("**Risk score breakdown**")
-
-        breakdown_rows = [
-            {
-                "Risk factor": str(key).replace("_", " ").title(),
-                "Points": value,
-            }
-            for key, value in breakdown.items()
-        ]
-
-        st.dataframe(
-            pd.DataFrame(breakdown_rows),
-            use_container_width=True,
-            hide_index=True,
-            key=f"risk_breakdown_{key_prefix}",
-        )
-
-
-def report_to_text(report):
-    """Convert report data into downloadable text."""
-
-    if isinstance(report, (dict, list)):
-        return json.dumps(report, indent=2, default=str)
-
-    return safe_value(report)
-
-
-# ==================================================
-# Dashboard header
-# ==================================================
-
-st.markdown(
-    """
-    <style>
-    .project-banner {
-        padding: 24px;
-        border-radius: 14px;
-        background: linear-gradient(120deg, #14243a, #123047);
-        border: 1px solid #31516a;
-        margin-bottom: 20px;
+    factors = {
+        "Public exposure": selected.get("public_exposure", False),
+        "Sensitive data": selected.get("sensitive_data", False),
+        "Exploitability": selected.get("exploitability", "Unknown"),
     }
 
-    .project-banner h1 {
-        margin-bottom: 6px;
-        color: #f8fafc;
-    }
-
-    .project-tagline {
-        font-size: 18px;
-        color: #cbd5e1;
-    }
-
-    .project-status {
-        margin-top: 12px;
-        color: #7dd3fc;
-        font-size: 12px;
-        letter-spacing: 1px;
-    }
-    </style>
-
-    <div class="project-banner">
-        <h1>🛡️ CloudSentinel</h1>
-        <div class="project-tagline">
-            Cloud Security Intelligence Platform
-        </div>
-        <div class="project-status">
-            RISK ANALYSIS • DECISION SUPPORT • SIMULATED REMEDIATION
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.caption(
-    "Educational DevSecOps project | Local simulation | No AWS connection"
-)
-
-st.info(
-    "CloudSentinel scans supported Terraform security patterns, "
-    "prioritises risks, explains decisions, and demonstrates "
-    "simulated remediation. It does not deploy resources or modify "
-    "cloud configurations."
-)
+    st.json(factors)
 
 
-# ==================================================
-# Sidebar
-# ==================================================
-
-st.sidebar.title("🛡️ CloudSentinel")
-st.sidebar.caption("Security Control Panel")
-st.sidebar.divider()
-st.sidebar.write("**Operating mode**")
-st.sidebar.success("Local simulation")
-st.sidebar.write("**Cloud connection:** None")
-st.sidebar.write("**Deployment:** Disabled")
-st.sidebar.write("**Cloud resource cost:** None required")
-st.sidebar.divider()
-st.sidebar.caption("Terraform scanning runs locally.")
-
-
-# ==================================================
-# Sample security analysis
-# ==================================================
-
-st.header("📊 Sample Security Analysis")
-
-st.write(
-    "Run the demonstration dataset to see risk scoring, prioritisation, "
-    "related findings, simulated remediation, and report generation."
-)
-
-if st.button(
-    "▶ Run Security Analysis",
-    type="primary",
-    key="run_sample_security_analysis",
-):
-    try:
-        results = run_security_workflow(
-            SAMPLE_FINDINGS,
-            SAMPLE_STORAGE_CONFIG,
-        )
-
-        st.session_state["security_results"] = results
-        st.success("Sample security analysis completed.")
-
-    except Exception as exc:
-        st.error(f"Sample analysis failed: {exc}")
-
-
-results = st.session_state.get("security_results")
-
-if results:
-    findings = results.get("prioritised_findings", [])
-    remediation = results.get("remediation_result", {})
-    report = results.get("report", "")
-
-    st.divider()
-    st.header("📊 Security Overview")
-
-    critical_count = sum(
-        item.get("risk_level") == "CRITICAL"
-        for item in findings
-    )
-
-    high_count = sum(
-        item.get("risk_level") == "HIGH"
-        for item in findings
-    )
-
-    medium_count = sum(
-        item.get("risk_level") == "MEDIUM"
-        for item in findings
-    )
-
-    low_count = sum(
-        item.get("risk_level") == "LOW"
-        for item in findings
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Total Findings", len(findings))
-    col2.metric("Critical Risks", critical_count)
-    col3.metric("High Risks", high_count)
-    col4.metric("Medium / Low", medium_count + low_count)
-
-    st.divider()
-    st.header("🎯 Risk Prioritisation")
-
-    st.write(
-        "Findings are ranked using severity, exposure, data sensitivity, "
-        "and exploitability. Higher-risk findings receive higher priority."
-    )
-
-    display_findings_table(
-        findings,
-        key_prefix="sample_findings",
-    )
-
-    related_findings_section(
-        findings,
-        title="Related Sample Findings",
-    )
-
-    display_finding_explanations(
-        findings,
-        title="Sample Security Decisions",
-        key_prefix="sample",
-    )
-
-    st.divider()
-    st.header("🧰 Simulated Remediation")
-
-    st.caption(
-        "This is a simulation. It does not change any AWS settings "
-        "or real cloud resources."
-    )
-
-    if isinstance(remediation, dict):
-        for key, value in remediation.items():
-            st.write(
-                f"**{key.replace('_', ' ').title()}:** {value}"
-            )
-    else:
-        st.write(safe_value(remediation))
-
-    st.divider()
-    st.header("📄 Sample Security Report")
-
-    st.download_button(
-        "⬇ Download Sample Security Report",
-        data=report_to_text(report),
-        file_name="cloudsentinel_security_report.txt",
-        mime="text/plain",
-        key="download_sample_security_report",
-    )
-
-
-# ==================================================
-# Local Terraform security scanner
-# ==================================================
+# --------------------------------------------------
+# SAMPLE SECURITY ANALYSIS
+# --------------------------------------------------
 
 st.divider()
-st.header("📁 Local Terraform Security Scanner")
+st.header("🎯 Risk Prioritisation")
+
+workflow = run_security_workflow(
+    sample_findings,
+    sample_storage_config,
+)
+
+findings = workflow["prioritised_findings"]
+
+# Risk overview
+critical_count = sum(
+    1 for item in findings
+    if item.get("risk_level") == "CRITICAL"
+)
+
+high_count = sum(
+    1 for item in findings
+    if item.get("risk_level") == "HIGH"
+)
+
+medium_count = sum(
+    1 for item in findings
+    if item.get("risk_level") == "MEDIUM"
+)
+
+low_count = sum(
+    1 for item in findings
+    if item.get("risk_level") == "LOW"
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Critical", critical_count)
+col2.metric("High", high_count)
+col3.metric("Medium", medium_count)
+col4.metric("Low", low_count)
+
+
+# --------------------------------------------------
+# RISK DISTRIBUTION CHART
+# --------------------------------------------------
+
+st.subheader("📈 Risk Distribution")
+
+risk_distribution = pd.DataFrame({
+    "Risk Level": ["Critical", "High", "Medium", "Low"],
+    "Number of Findings": [
+        critical_count,
+        high_count,
+        medium_count,
+        low_count,
+    ],
+}).set_index("Risk Level")
+
+st.bar_chart(
+    risk_distribution,
+    y="Number of Findings",
+)
+
+
+# --------------------------------------------------
+# RISK LEVEL FILTER
+# --------------------------------------------------
+
+st.subheader("🔎 Filter Security Findings")
+
+risk_filter = st.selectbox(
+    "Choose a risk level",
+    ["All", "CRITICAL", "HIGH", "MEDIUM", "LOW"],
+    key="sample_risk_filter",
+)
+
+if risk_filter == "All":
+    filtered_findings = findings
+else:
+    filtered_findings = [
+        item for item in findings
+        if item.get("risk_level") == risk_filter
+    ]
+
+st.caption(
+    f"Showing {len(filtered_findings)} of {len(findings)} findings."
+)
+
+display_findings_table(
+    filtered_findings,
+    key_prefix="sample_findings",
+)
+
+related_findings_section(
+    filtered_findings,
+    title="Related Sample Findings",
+)
+
+display_finding_explanations(
+    filtered_findings,
+    title="Sample Security Decisions",
+    key_prefix="sample",
+)
+
+
+# --------------------------------------------------
+# SIMULATED REMEDIATION
+# --------------------------------------------------
+
+st.divider()
+st.header("🔧 Simulated Security Remediation")
+
+remediation = workflow["remediation_result"]
+
+st.write("**Remediation status:**", remediation.get("status", "Unknown"))
+
+if remediation.get("verification_passed"):
+    st.success(remediation.get("verification_message", "Verification passed."))
+else:
+    st.warning(remediation.get("verification_message", "Verification requires review."))
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.write("**Before remediation**")
+    st.json(remediation.get("original_config", {}))
+
+with col2:
+    st.write("**After simulated remediation**")
+
+    after_config = {
+        key: value
+        for key, value in remediation.items()
+        if key not in [
+            "original_config",
+            "changes",
+            "verification_passed",
+            "verification_message",
+        ]
+    }
+
+    st.json(after_config)
+
+st.write("**Recorded changes**")
+
+changes = remediation.get("changes", [])
+
+if changes:
+    st.dataframe(
+        pd.DataFrame(changes),
+        use_container_width=True,
+        hide_index=True,
+    )
+else:
+    st.info("No configuration changes were required.")
+
+
+# --------------------------------------------------
+# SECURITY REPORT DOWNLOAD
+# --------------------------------------------------
+
+st.divider()
+st.header("📄 CloudSentinel Security Report")
+
+report = workflow.get("report", {})
+
+# Overall security summary
+summary = report.get("security_summary", {})
+
+st.subheader("Security Assessment Overview")
+
+status = summary.get("overall_status", "Not available")
+total = report.get("total_findings", 0)
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Overall Security Status", status)
+col2.metric("Total Findings", total)
+col3.metric(
+    "Remediation Verified",
+    "Yes" if workflow.get("verification_passed") else "No"
+)
+
+# Risk distribution
+st.subheader("Risk Distribution")
+
+distribution = summary.get("risk_distribution", {})
+
+risk_df = pd.DataFrame({
+    "Risk Level": list(distribution.keys()),
+    "Findings": list(distribution.values()),
+}).set_index("Risk Level")
+
+st.bar_chart(risk_df)
+
+# Remediation verification
+st.subheader("Remediation Verification")
+
+if workflow.get("verification_passed"):
+    st.success(workflow.get("verification_message"))
+else:
+    st.warning(workflow.get("verification_message"))
+
+# Detailed findings
+st.subheader("Prioritised Security Findings")
+
+report_findings = report.get(
+    "finding_details",
+    report.get("findings", [])
+)
+
+if report_findings:
+    st.dataframe(
+        pd.DataFrame(report_findings),
+        use_container_width=True,
+        hide_index=True,
+    )
+else:
+    st.info("No findings available.")
+
+# Remediation information
+st.subheader("Remediation Details")
+
+st.json(report.get("remediation", {}))
+
+# Report preview
+st.subheader("Complete Report Preview")
+
+st.json(report)
+
+# Download options
+st.subheader("Download Your Reports")
+
+report_text = json.dumps(
+    report,
+    indent=4,
+    default=str,
+)
+
+st.download_button(
+    label="Download Security Report",
+    data=report_text,
+    file_name="cloudsentinel_security_report.txt",
+    mime="text/plain",
+)
+
+st.download_button(
+    label="Download JSON Report",
+    data=json.dumps(
+        report,
+        indent=4,
+        default=str,
+    ),
+    file_name="cloudsentinel_security_report.json",
+    mime="application/json",
+)
+
+# --------------------------------------------------
+# TERRAFORM SECURITY SCANNER
+# --------------------------------------------------
+
+st.divider()
+st.header("📂 Terraform Security Scanner")
 
 st.write(
-    "Upload a Terraform `.tf` file to inspect supported security "
-    "patterns. The file is scanned locally."
+    "Upload a Terraform `.tf` file to check for selected "
+    "cloud security configuration risks."
 )
 
 uploaded_file = st.file_uploader(
-    "Choose a Terraform file",
+    "Upload Terraform file",
     type=["tf"],
-    key="terraform_upload",
 )
 
 if uploaded_file is not None:
-    if st.button(
-        "🔎 Scan Terraform File",
-        type="primary",
-        key="scan_terraform_file",
-    ):
-        temporary_path = None
+
+    st.write("**Uploaded file:**", uploaded_file.name)
+
+    if st.button("Scan Terraform File"):
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                suffix=".tf",
-                delete=False,
-            ) as temporary_file:
-                temporary_file.write(uploaded_file.getvalue())
-                temporary_path = Path(temporary_file.name)
+            with tempfile.TemporaryDirectory() as temp_dir:
 
-            raw_findings = scan_terraform_file(temporary_path)
+                temp_file_path = Path(temp_dir) / uploaded_file.name
 
-            # Display the original uploaded filename, not the
-            # temporary filename used for local scanning.
-            for finding in raw_findings:
+                temp_file_path.write_bytes(
+                    uploaded_file.getvalue()
+                )
+
+                terraform_findings = scan_terraform_file(
+                    str(temp_file_path)
+                )
+
+            for finding in terraform_findings:
                 finding["resource"] = uploaded_file.name
 
-            if raw_findings:
-                ranked_findings = prioritise_findings(raw_findings)
+            prioritised_terraform_findings = prioritise_findings(
+                terraform_findings
+            )
 
-                st.session_state["terraform_findings"] = ranked_findings
-                st.session_state["terraform_filename"] = uploaded_file.name
+            st.session_state["terraform_findings"] = (
+                prioritised_terraform_findings
+            )
 
-                st.success(
-                    f"Scan completed. Found {len(ranked_findings)} "
-                    "security finding(s)."
-                )
+            st.session_state["terraform_filename"] = uploaded_file.name
 
-            else:
-                st.session_state["terraform_findings"] = []
-                st.session_state["terraform_filename"] = uploaded_file.name
-
-                st.success(
-                    "No supported security issues were detected "
-                    "by the current scanner."
-                )
-
-        except Exception as exc:
-            st.error(f"Terraform scan failed: {exc}")
-
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+        except Exception as error:
+            st.error(f"Scanning failed: {error}")
 
 
-# ==================================================
-# Terraform results
-# ==================================================
+# --------------------------------------------------
+# TERRAFORM SCAN RESULTS
+# --------------------------------------------------
 
-terraform_findings = st.session_state.get("terraform_findings")
+if "terraform_findings" in st.session_state:
 
-if terraform_findings is not None:
-    filename = st.session_state.get(
-        "terraform_filename",
-        "uploaded-file.tf",
+    terraform_results = st.session_state["terraform_findings"]
+
+    st.subheader("📊 Terraform Scan Results")
+
+    st.write(
+        f"File scanned: {st.session_state.get('terraform_filename', 'Unknown')}"
     )
 
-    st.subheader(f"Results for {filename}")
+    if terraform_results:
 
-    if terraform_findings:
+        st.success(
+            f"Scan completed. Found {len(terraform_results)} security finding(s)."
+        )
+
+        # Terraform risk filter
+        terraform_risk_filter = st.selectbox(
+            "Filter Terraform findings by risk level",
+            ["All", "CRITICAL", "HIGH", "MEDIUM", "LOW"],
+            key="terraform_risk_filter",
+        )
+
+        if terraform_risk_filter == "All":
+            filtered_terraform_findings = terraform_results
+        else:
+            filtered_terraform_findings = [
+                item for item in terraform_results
+                if item.get("risk_level") == terraform_risk_filter
+            ]
+
+        st.caption(
+            f"Showing {len(filtered_terraform_findings)} "
+            f"of {len(terraform_results)} Terraform findings."
+        )
+
         display_findings_table(
-            terraform_findings,
+            filtered_terraform_findings,
             key_prefix="terraform_findings",
         )
 
         related_findings_section(
-            terraform_findings,
+            filtered_terraform_findings,
             title="Related Terraform Findings",
         )
 
         display_finding_explanations(
-            terraform_findings,
+            filtered_terraform_findings,
             title="Terraform Security Decisions",
             key_prefix="terraform",
         )
 
-        csv_rows = []
-
-        for item in terraform_findings:
-            csv_rows.append({
-                "Finding ID": item.get("id", ""),
-                "Check ID": item.get("check_id", ""),
-                "Rule ID": item.get("rule_id", ""),
-                "Resource": item.get("resource", ""),
-                "Severity": item.get("severity", ""),
-                "Risk Level": item.get("risk_level", ""),
-                "Risk Score": item.get("risk_score", ""),
-                "Priority": item.get("priority", ""),
-                "Why This Priority": item.get("priority_reason", ""),
-                "Recommendation": item.get("recommendation", ""),
-            })
-
-        csv_data = pd.DataFrame(csv_rows).to_csv(index=False)
+        # CSV download
+        csv_data = pd.DataFrame(terraform_results).to_csv(index=False)
 
         st.download_button(
-            "⬇ Download Terraform Findings (CSV)",
+            label="Download Terraform Findings CSV",
             data=csv_data,
             file_name="cloudsentinel_terraform_findings.csv",
             mime="text/csv",
-            key="download_terraform_findings_csv",
         )
 
-        report_data = {
-            "project": "CloudSentinel",
-            "scan_type": "Local Terraform scan",
-            "filename": filename,
-            "finding_count": len(terraform_findings),
-            "findings": terraform_findings,
-        }
+        # JSON download
+        terraform_json = json.dumps(
+            terraform_results,
+            indent=4,
+            default=str,
+        )
 
         st.download_button(
-            "⬇ Download Terraform Security Report (JSON)",
-            data=json.dumps(report_data, indent=2, default=str),
-            file_name="cloudsentinel_terraform_report.json",
+            label="Download Terraform Findings JSON",
+            data=terraform_json,
+            file_name="cloudsentinel_terraform_findings.json",
             mime="application/json",
-            key="download_terraform_security_report",
         )
 
     else:
         st.success(
-            "No supported security issues were detected by the "
-            "current scanner. This does not guarantee that the file "
-            "is completely secure."
+            "No security findings detected by the current scanner checks."
         )
 
 
-# ==================================================
-# Footer
-# ==================================================
+# --------------------------------------------------
+# FOOTER
+# --------------------------------------------------
 
 st.divider()
 
 st.caption(
-    "CloudSentinel | Educational security decision-support prototype | "
-    "Local-only operation | No AWS deployment"
+    "CloudSentinel | Explainable Security Prioritisation | "
+    "Local-only simulation | No real cloud resources modified"
 )

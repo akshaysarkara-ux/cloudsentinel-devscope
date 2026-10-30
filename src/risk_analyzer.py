@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+
 SEVERITY_POINTS = {
     "critical": 40,
     "high": 30,
@@ -31,9 +32,18 @@ RECOMMENDATIONS = {
     ),
 }
 
+SEVERITY_ORDER = {
+    "critical": 4,
+    "high": 3,
+    "medium": 2,
+    "low": 1,
+    "info": 0,
+}
+
 
 def _normalise(value, allowed, field_name):
     """Validate and standardise a finding value."""
+
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string.")
 
@@ -74,7 +84,9 @@ def analyse_finding(finding):
         finding["severity"], SEVERITY_POINTS, "severity"
     )
     exposure = _normalise(
-        finding["exposure"], {"public", "internal"}, "exposure"
+        finding["exposure"],
+        {"public", "internal"},
+        "exposure",
     )
     sensitivity = _normalise(
         finding["data_sensitivity"],
@@ -122,25 +134,123 @@ def analyse_finding(finding):
     return result
 
 
+def _priority_key(item):
+    """Order findings using risk score and additional risk factors."""
+
+    return (
+        item["risk_score"],
+        item["score_breakdown"]["public_exposure"],
+        item["score_breakdown"]["sensitive_data"],
+        SEVERITY_ORDER[item["severity"].strip().lower()],
+        item["score_breakdown"]["exploitability"],
+    )
+
+
+def _explain_priority(item):
+    """Explain why a finding deserves its priority."""
+
+    reasons = []
+
+    if item["exposure"].strip().lower() == "public":
+        reasons.append("the resource is publicly exposed")
+
+    if item["data_sensitivity"].strip().lower() == "sensitive":
+        reasons.append("sensitive data may be at risk")
+
+    severity = item["severity"].strip().lower()
+
+    if severity == "critical":
+        reasons.append("the finding has critical severity")
+    elif severity == "high":
+        reasons.append("the finding has high severity")
+    elif severity == "medium":
+        reasons.append("the finding has medium severity")
+
+    if item["exploitability"].strip().lower() == "high":
+        reasons.append("the issue has high exploitability")
+    elif item["exploitability"].strip().lower() == "medium":
+        reasons.append("the issue has medium exploitability")
+
+    if not reasons:
+        reasons.append(
+            "its risk score and other risk factors determine "
+            "its position"
+        )
+
+    return "Prioritised because " + "; ".join(reasons) + "."
+
+
+def _identify_related_findings(findings):
+    """Identify findings sharing the same resource and security rule."""
+
+    groups = {}
+
+    for item in findings:
+        resource = str(
+            item.get("resource", "unknown")
+        ).strip().lower()
+        rule_id = str(
+            item.get("rule_id", "unknown")
+        ).strip().upper()
+
+        group_key = (resource, rule_id)
+        groups.setdefault(group_key, []).append(item)
+
+    for group in groups.values():
+        related_ids = [
+            str(other.get("check_id", other.get("id", "Unknown")))
+            for other in group
+        ]
+
+        for item in group:
+            item["related_finding_count"] = len(group)
+            item["related_findings"] = [
+                related_id
+                for other, related_id in zip(group, related_ids)
+                if other["id"] != item["id"]
+            ]
+
+    return findings
+
+
 def prioritise_findings(findings):
-    """Sort findings from highest risk score to lowest."""
+    """Rank findings and explain which should be fixed first."""
 
     if not isinstance(findings, (list, tuple)):
         raise ValueError("findings must be a list or tuple.")
 
     results = [analyse_finding(item) for item in findings]
 
-    return sorted(
+    # Add context about related findings without changing their scores.
+    _identify_related_findings(results)
+
+    # Higher risk scores come first. Additional factors break ties.
+    ranked = sorted(
         results,
-        key=lambda item: item["risk_score"],
+        key=_priority_key,
         reverse=True,
     )
+
+    for index, item in enumerate(ranked, start=1):
+        if index == 1:
+            priority = "FIX FIRST"
+        elif index == 2:
+            priority = "FIX NEXT"
+        else:
+            priority = "FIX AFTER HIGHER PRIORITIES"
+
+        item["priority_rank"] = index
+        item["priority"] = priority
+        item["priority_reason"] = _explain_priority(item)
+
+    return ranked
 
 
 if __name__ == "__main__":
     sample_findings = [
         {
             "id": "F-001",
+            "check_id": "BLOCK_PUBLIC_ACLS",
             "rule_id": "PUBLIC_ACCESS",
             "resource": "example-storage",
             "severity": "high",
@@ -150,6 +260,7 @@ if __name__ == "__main__":
         },
         {
             "id": "F-002",
+            "check_id": "VERSIONING_DISABLED",
             "rule_id": "VERSIONING_DISABLED",
             "resource": "internal-backup",
             "severity": "medium",
@@ -161,7 +272,17 @@ if __name__ == "__main__":
 
     for finding in prioritise_findings(sample_findings):
         print(
-            f'{finding["id"]}: {finding["risk_level"]} '
+            f'{finding["priority_rank"]}. '
+            f'{finding["priority"]}: {finding["id"]}'
+        )
+        print(
+            f'   Risk: {finding["risk_level"]} '
             f'({finding["risk_score"]}/100)'
         )
-        print(f'  Fix: {finding["recommendation"]}')
+        print(
+            f'   Related findings: '
+            f'{finding["related_finding_count"]}'
+        )
+        print(f'   Why: {finding["priority_reason"]}')
+        print(f'   Fix: {finding["recommendation"]}')
+        print()
