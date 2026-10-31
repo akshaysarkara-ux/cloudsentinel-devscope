@@ -236,6 +236,7 @@ def display_finding_explanations(
 # SAMPLE SECURITY ANALYSIS
 # --------------------------------------------------
 
+st.info("DEMO DATA — These are predefined sample findings for demonstration. They are not results from your uploaded Terraform file.")
 st.divider()
 st.header("🎯 Risk Prioritisation")
 
@@ -550,6 +551,8 @@ if uploaded_file is not None:
 if "terraform_findings" in st.session_state:
 
     terraform_results = st.session_state["terraform_findings"]
+    
+    st.info("YOUR SCAN RESULTS — These findings come from the Terraform file you uploaded and scanned.")    
 
     st.subheader("📊 Terraform Scan Results")
 
